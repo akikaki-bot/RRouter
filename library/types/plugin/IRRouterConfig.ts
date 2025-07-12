@@ -6,6 +6,7 @@ export interface __IRRouterConfig {
     useCors : boolean;
     useUrlEncoded : boolean;
     dirname : string;
+    enableValidator : boolean;
     // useCookieParser : boolean;
     // useBodyParser : boolean;
     // useSession : boolean;
