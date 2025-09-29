@@ -9,6 +9,8 @@ import {
     HTTPMethod,
     IRRouterRouterConfig
 } from "../../types";
+import { IRRouterRouterData, IRRouterRouterDatas } from '../../types/router/IRRouterData';
+import { HTTPMethods } from '../constants/httpMethods';
 
 export class RRouter {
 
@@ -16,6 +18,7 @@ export class RRouter {
     private __expressExtends: Express.RequestHandler[] = [];
     private __isDev: boolean = false;
     private dirname: string = __dirname;
+    private __OVERRIDE_METHODS = false;
 
     /**
      * Check if the RRouter is ready.
@@ -31,6 +34,10 @@ export class RRouter {
      * @type {Express.Application}
      */
     public __app: Express.Application | null = null;
+    /**
+     * Registered routes
+     */
+    protected registeredRoutes: IRRouterRouterDatas = [];
 
     protected Request: Express.Request;
     protected Response: Express.Response;
@@ -116,9 +123,12 @@ export class RRouter {
         if (config.isDev) {
             this.__isDev = true;
         }
+        if( config.OVERRIDE_HTTP_METHOD ){
+            this.__OVERRIDE_METHODS = true
+        }
     }
 
-    protected traseLog(message: string) {
+    protected traseLog(...message: Array<string | object | symbol | number | boolean>) {
         if (this.__isDev) {
             console.log(message);
         }
@@ -132,6 +142,91 @@ export class RRouter {
             return '/';
         }
         else return "/" + newPath.join('/').replace(/\/index(\.ts|\.js)/g, '').replace(/\.ts/g, '').replace(/\.js/g, '');
+    }
+
+    private parseHTTPMethods( method : HTTPMethod | HTTPMethod[] ) : HTTPMethod[] {
+        if( Array.isArray( method )){
+            return method
+        }
+        else return [ method ]
+    }
+
+    /**
+     * Check the added route
+     * @param routeConfig 
+     * @returns {boolean}
+     */
+    private isAlreadyAddedRoute( routeConfig : IRRouterRouterData ){
+        this.traseLog( routeConfig, this.parseHTTPMethods( routeConfig.method ) )
+        return this.parseHTTPMethods( routeConfig.method ).map( method => {
+            if( this.registeredRoutes.length == 0 ) return false
+            return this.registeredRoutes.filter( v => 
+                this.parseHTTPMethods( v.method ).includes( method )
+                && v.path == routeConfig.path
+            ).length > 0 ? true : false
+        }).includes( true ) ? true : false
+    }
+
+    /**
+     * add to internal routes
+     * @param routeConfig
+     */
+    private addRoutes( routeConfig : IRRouterRouterData ){
+        if( !this.__OVERRIDE_METHODS && this.isAlreadyAddedRoute( routeConfig )){
+            throw new CantRegisterError(`The route [${routeConfig.method}] ${routeConfig.path} is already added.\nIf you want to override http methods, you can change the config.`);
+        }
+        this.registeredRoutes.push({
+            path: routeConfig.path,
+            method : routeConfig.method,
+            router: routeConfig.router
+        })
+    }
+
+    /**
+     * parse `export const config` in the router file
+     * @param path 
+     * @param routerConfig 
+     */
+    private parseConfig( path: string,  routerConfig : IRRouterRouterConfig ) {
+        const methods = Object.keys(routerConfig).filter(
+            v => HTTPMethods.includes( v as HTTPMethod )
+        ) as HTTPMethod[]
+        methods.map( method => {
+            const handler = routerConfig[method] as IRRouterRouter
+            if( typeof handler != "function") return;
+            this.addRoutes({
+                path,
+                method,
+                router: handler
+            })
+        })
+    }
+
+    private async loadByConfig( app : Express.Application, route: string ) {
+        const routerConfig = ( await import(route)).config as IRRouterRouterConfig || undefined
+        this.traseLog( routerConfig )
+        if( typeof routerConfig !== "undefined" ){
+            if( 
+                Object.keys(routerConfig).some(
+                    v => HTTPMethods.includes( v.toUpperCase() as HTTPMethod )
+                )
+            ) {
+                const path = this.getRouterPath(route);
+                this.traseLog(`[Loader] loading ${path}`)
+                this.parseConfig( path, routerConfig );
+                app.use( async ( req , res, next ) => {
+                    this.traseLog(`${req.method}: ${req.path} -> ${path}`)
+                    if( req.path !== path ) return next();
+                    if( routerConfig[req.method.toUpperCase() as HTTPMethod] ){
+                        await routerConfig[req.method.toUpperCase() as HTTPMethod](
+                            req, res, next
+                        )
+                    } else {
+                        next()
+                    }
+                })
+            }
+        }
     }
 
     /**
@@ -153,6 +248,7 @@ export class RRouter {
             routes.map(async route => {
                 const router = (await import(route)).default as Router | IRRouterRouter | void;
                 if (typeof router === "undefined" || !router || typeof router !== "function") {
+                    await this.loadByConfig( app, route)
                     this.traseLog(`[RRouter -> Route] Invalid route: ${route}`);
                     return;
                 }
@@ -164,7 +260,10 @@ export class RRouter {
                     const path = this.getRouterPath(route);
                     this.traseLog(`[Loader] GET : ${path}`);
                     if( typeof routerConfig !== "undefined" ){
+                        await this.loadByConfig( app, route)
                         if ("method" in routerConfig) {
+                            this.addRoutes({ path, method: routerConfig.method, router })
+                            //this.parseConfig( path, routerConfig )
                             app.use(async (req, res, next) => {
                                 this.traseLog(`${req.method} : ${req.path} -> ${path}`);
                                 if (req.path !== path) return next();
@@ -183,13 +282,17 @@ export class RRouter {
                                 await router(req, res, next);
                             }
                         );
+                        this.addRoutes({
+                            path,
+                            method: HTTPMethods ,
+                            router
+                        })
                     }
                 }
                 routeCount++;
                 console.log(`[Loader] Loaded : ${"stack" in router ? router.stack[0].route?.path : this.getRouterPath(route)}`);
                 if (routeCount === routes.length) {
                     this.traseLog('[RRouter -> Route] All routes loaded.');
-
                     this.traseLog('[RRouter] Registering plugins...');
                     this.__plugins.forEach(plugin => {
                         this.traseLog(`[RRouter -> Plugin] Registering plugin: ${plugin.name}`);
@@ -198,7 +301,10 @@ export class RRouter {
                         //
                         if (typeof plugin.onUse == "function") {
                             if (plugin.onUse instanceof Promise) {
-                                app.use(plugin.onUse);
+                                // promisified onUse
+                                app.use( async(...args) => {
+                                    await plugin.onUse(...args);
+                                });
                             }
                             else app.use(plugin.onUse);
                         }

@@ -66,7 +66,25 @@ router.get('/', async ( req, res ) => {
 export default router
 ```
 
+and Custom method handler!
 
+```ts
+import { IRRouterRouter, IRRouterRouterConfig } from "rrouter/types";
+
+export const config : IRRouterRouterConfig = {
+    POST : customPOSTHandler
+}
+
+const customPOSTHandler : IRRouterRouter = async ( req, res ) => {
+    res.status(200).json({
+        status : "OK",
+        data : req.data
+    });
+}
+
+const blankRouter : IRRouterRouter = ( req, res) => void 0;
+export default blankRouter
+```
 
 
 
