@@ -19,5 +19,5 @@ export {
 } from "./types"
 
 // for Legacy support
-module.exports = RRouter
-module.exports.default = RRouter
+//module.exports = RRouter
+//module.exports.default = RRouter

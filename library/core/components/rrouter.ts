@@ -132,13 +132,15 @@ export class RRouter {
         if (config.enableValidator) {
             this.__vaildator = true
         }
-        if( config.OVERRIDE_HTTP_METHOD ){
+        if (config.OVERRIDE_HTTP_METHOD) {
             this.__OVERRIDE_METHODS = true
         }
     }
 
     protected traseLog(...message: Array<string | object | symbol | number | boolean>) {
         if (this.__isDev) {
+            console.log(message);
+            return;
             if (typeof message === "string") console.log(message);
             else console.dir(message, { depth: null });
         }
@@ -154,11 +156,11 @@ export class RRouter {
         else return "/" + newPath.join('/').replace(/\/index(\.ts|\.js)/g, '').replace(/\.ts/g, '').replace(/\.js/g, '');
     }
 
-    private parseHTTPMethods( method : HTTPMethod | HTTPMethod[] ) : HTTPMethod[] {
-        if( Array.isArray( method )){
+    private parseHTTPMethods(method: HTTPMethod | HTTPMethod[]): HTTPMethod[] {
+        if (Array.isArray(method)) {
             return method
         }
-        else return [ method ]
+        else return [method]
     }
 
     /**
@@ -166,28 +168,28 @@ export class RRouter {
      * @param routeConfig 
      * @returns {boolean}
      */
-    private isAlreadyAddedRoute( routeConfig : IRRouterRouterData ){
-        this.traseLog( routeConfig, this.parseHTTPMethods( routeConfig.method ) )
-        return this.parseHTTPMethods( routeConfig.method ).map( method => {
-            if( this.registeredRoutes.length == 0 ) return false
-            return this.registeredRoutes.filter( v => 
-                this.parseHTTPMethods( v.method ).includes( method )
+    private isAlreadyAddedRoute(routeConfig: IRRouterRouterData) {
+        this.traseLog(routeConfig, this.parseHTTPMethods(routeConfig.method))
+        return this.parseHTTPMethods(routeConfig.method).map(method => {
+            if (this.registeredRoutes.length == 0) return false
+            return this.registeredRoutes.filter(v =>
+                this.parseHTTPMethods(v.method).includes(method)
                 && v.path == routeConfig.path
             ).length > 0 ? true : false
-        }).includes( true ) ? true : false
+        }).includes(true) ? true : false
     }
 
     /**
      * add to internal routes
      * @param routeConfig
      */
-    private addRoutes( routeConfig : IRRouterRouterData ){
-        if( !this.__OVERRIDE_METHODS && this.isAlreadyAddedRoute( routeConfig )){
+    private addRoutes(routeConfig: IRRouterRouterData) {
+        if (!this.__OVERRIDE_METHODS && this.isAlreadyAddedRoute(routeConfig)) {
             throw new CantRegisterError(`The route [${routeConfig.method}] ${routeConfig.path} is already added.\nIf you want to override http methods, you can change the config.`);
         }
         this.registeredRoutes.push({
             path: routeConfig.path,
-            method : routeConfig.method,
+            method: routeConfig.method,
             router: routeConfig.router
         })
     }
@@ -197,13 +199,13 @@ export class RRouter {
      * @param path 
      * @param routerConfig 
      */
-    private parseConfig( path: string,  routerConfig : IRRouterRouterConfig ) {
+    private parseConfig(path: string, routerConfig: IRRouterRouterConfig) {
         const methods = Object.keys(routerConfig).filter(
-            v => HTTPMethods.includes( v as HTTPMethod )
+            v => HTTPMethods.includes(v as HTTPMethod)
         ) as HTTPMethod[]
-        methods.map( method => {
+        methods.map(method => {
             const handler = routerConfig[method] as IRRouterRouter
-            if( typeof handler != "function") return;
+            if (typeof handler != "function") return;
             this.addRoutes({
                 path,
                 method,
@@ -212,25 +214,75 @@ export class RRouter {
         })
     }
 
-    private async loadByConfig( app : Express.Application, route: string ) {
-        const routerConfig = ( await import(route)).config as IRRouterRouterConfig || undefined
-        this.traseLog( routerConfig )
-        if( typeof routerConfig !== "undefined" ){
-            if( 
+    private async getRouteCounts(routes: string[]): Promise<number> {
+        const defaultRouteCounts = routes.map(async route => {
+            const router = (await import(route)).default as Router | IRRouterRouter | void;
+            if (typeof router === "undefined" || !router || typeof router !== "function") {
+                return 0;
+            }
+            return 1;
+        })
+        const configurationRouteCounts = routes.map(async route => {
+            const routerConfig = (await import(route)).config as IRRouterRouterConfig || undefined
+            if (typeof routerConfig !== "undefined") {
+                if (
+                    Object.keys(routerConfig).some(
+                        v => HTTPMethods.includes(v.toUpperCase() as HTTPMethod)
+                    )
+                ) {
+                    return 1;
+                }
+            }
+            return 0;
+        })
+        return (
+            await Promise.all(defaultRouteCounts)
+        ).reduce((a, b) => a + b, 0) + (
+            await Promise.all(configurationRouteCounts)
+        ).reduce((a, b) => a + b, 0);
+    }
+
+    private async loadByConfig(app: Express.Application, route: string, validator?: z.AnyZodObject) {
+        const routerConfig = (await import(route)).config as IRRouterRouterConfig || undefined
+        this.traseLog(routerConfig)
+        if (typeof routerConfig !== "undefined") {
+            if (
                 Object.keys(routerConfig).some(
-                    v => HTTPMethods.includes( v.toUpperCase() as HTTPMethod )
+                    v => HTTPMethods.includes(v.toUpperCase() as HTTPMethod)
                 )
             ) {
                 const path = this.getRouterPath(route);
                 this.traseLog(`[Loader] loading ${path}`)
-                this.parseConfig( path, routerConfig );
-                app.use( async ( req , res, next ) => {
+                this.parseConfig(path, routerConfig);
+                app.use(async (req, res, next) => {
                     this.traseLog(`${req.method}: ${req.path} -> ${path}`)
-                    if( req.path !== path ) return next();
-                    if( routerConfig[req.method.toUpperCase() as HTTPMethod] ){
-                        await routerConfig[req.method.toUpperCase() as HTTPMethod](
-                            req, res, next
-                        )
+                    if (req.path !== path) return next();
+                    if (routerConfig[req.method.toUpperCase() as HTTPMethod]) {
+                        if (validator) {
+                            console.log(`[RRouter -> Route] Vaildator found: ${route} Parsing : ${req.body}`);
+                            const result = RRouterVaildatorExtends<typeof validator>(req.body, validator);
+                            if (result.success === "false") {
+                                if (typeof this.__plugins.find(p => p.name === "onVaildatorError") !== "undefined") {
+                                    this.__plugins.find(p => p.name === "onVaildatorError")?.onUse(req, res, next, result);
+                                } else {
+                                    res.status(400).json({
+                                        message: 'Vaildation error.',
+                                        error: result.error
+                                    })
+                                }
+                            }
+                            else {
+                                req.body = result.data;
+                                await routerConfig[req.method.toUpperCase() as HTTPMethod](
+                                    req, res, next
+                                )
+                            }
+                        }
+                        else {
+                            await routerConfig[req.method.toUpperCase() as HTTPMethod](
+                                req, res, next
+                            )
+                        }
                     } else {
                         next()
                     }
@@ -243,7 +295,7 @@ export class RRouter {
      * Start the RRouter Server.
      * @param {number} port the port to use.
      */
-    public start(
+    public async start(
         port: number = 3000,
     ) {
         const app = Express();
@@ -263,7 +315,10 @@ export class RRouter {
 
         const directory = new RouterDirectory(this.dirname);
         const routes = directory.getRoutes();
+        let allRouteCount = await this.getRouteCounts(routes);
         let routeCount = 0;
+
+        this.traseLog(`[RRouter -> Route] Found ${allRouteCount} routes.`);
 
         routes.map(async route => {
             const router = (await import(route)).default as Router | IRRouterRouter | void;
@@ -271,85 +326,94 @@ export class RRouter {
 
             if (typeof router === "undefined" || !router || typeof router !== "function") {
                 this.traseLog(`[RRouter -> Route] Invalid route: ${route}`);
+                allRouteCount--;
                 routes.splice(routes.indexOf(route), 1);
                 return;
             }
             if (this.__vaildator && typeof vaildator !== "undefined") {
                 if (typeof vaildator === "undefined") {
                     this.traseLog(`[RRouter -> Route] Vaildator not found: ${route}`);
-        Promise.all(
-            routes.map(async route => {
-                const router = (await import(route)).default as Router | IRRouterRouter | void;
-                if (typeof router === "undefined" || !router || typeof router !== "function") {
-                    await this.loadByConfig( app, route)
-                    this.traseLog(`[RRouter -> Route] Invalid route: ${route}`);
+                    allRouteCount--;
                     return;
                 }
-                const routerConfig = (await import(route)).config as IRRouterRouterConfig || undefined;
-                const path = this.getRouterPath(route);
+                Promise.all(
+                    routes.map(async route => {
+                        const router = (await import(route)).default as Router | IRRouterRouter | void;
+                        if (typeof router === "undefined" || !router || typeof router !== "function") {
+                            await this.loadByConfig(app, route, vaildator);
+                            this.traseLog(`[RRouter -> Route] Invalid route: ${route}`);
+                            return;
+                        }
+                        const routerConfig = (await import(route)).config as IRRouterRouterConfig || undefined;
+                        const path = this.getRouterPath(route);
 
-                if (typeof routerConfig !== "undefined") {
-                    if ("method" in routerConfig) {
-                        app.use(async (req, res, next) => {
-                            this.traseLog(`${req.method} : ${req.path} -> ${path}`);
-                            if (req.path !== path) return next();
-                            if (routerConfig.method.includes(req.method.toUpperCase() as HTTPMethod)) {
-                                if (req.method === "GET") {
-                                    next();
-                                    return;
-                                }
+                        if (typeof routerConfig !== "undefined") {
+                            await this.loadByConfig(app, route, vaildator)
+                            if ("method" in routerConfig) {
+                                app.use(async (req, res, next) => {
+                                    this.traseLog(`${req.method} : ${req.path} -> ${path}`);
+                                    if (req.path !== path) return next();
+                                    if (routerConfig.method.includes(req.method.toUpperCase() as HTTPMethod)) {
+                                        if (req.method === "GET") {
+                                            next();
+                                            return;
+                                        }
 
-                                console.log(`[RRouter -> Route] Vaildator found: ${route} Parsing : ${req.body}`);
-                                const result = RRouterVaildatorExtends<typeof vaildator>(req.body, vaildator);
-                                if (result.success === "false") {
-                                    if (typeof this.__plugins.find(p => p.name === "onVaildatorError") !== "undefined") {
-                                        this.__plugins.find(p => p.name === "onVaildatorError")?.onUse(req, res, next, result);
+                                        console.log(`[RRouter -> Route] Vaildator found: ${route} Parsing : ${req.body}`);
+                                        const result = RRouterVaildatorExtends<typeof vaildator>(req.body, vaildator);
+                                        if (result.success === "false") {
+                                            if (typeof this.__plugins.find(p => p.name === "onVaildatorError") !== "undefined") {
+                                                this.__plugins.find(p => p.name === "onVaildatorError")?.onUse(req, res, next, result);
+                                            } else {
+                                                res.status(400).json({
+                                                    message: 'Vaildation error.',
+                                                    error: result.error
+                                                })
+                                                return;
+                                            }
+                                        }
+                                        else {
+                                            req.body = result.data;
+                                            await router(req, res as Express.Response<typeof vaildator>, next);
+                                        }
                                     } else {
-                                        res.status(400).json({
-                                            message: 'Vaildation error.',
-                                            error: result.error
-                                        })
+                                        next();
+                                    }
+                                });
+                            }
+                        } else {
+                            app.use(
+                                path,
+                                async (req, res, next) => {
+                                    if (req.path !== path) return next();
+
+                                    // If the method is GET, skip the vaildator.
+                                    // Because the GET method doesn't have a body.
+                                    if (req.method === "GET") {
+                                        next();
+                                        return;
+                                    }
+                                    const result = RRouterVaildatorExtends<typeof vaildator>(req.body, vaildator);
+                                    if (result.success === "false") {
+                                        if (typeof this.__plugins.find(p => p.name === "onVaildatorError") !== "undefined") {
+                                            this.__plugins.find(p => p.name === "onVaildatorError")?.onUse(req, res, next, result);
+                                        } else {
+                                            res.status(400).json({
+                                                message: 'Vaildation error.',
+                                                error: result.error
+                                            })
+                                        }
+                                    }
+                                    else {
+                                        req.body = result.data;
+                                        await router(req, res as Express.Response<typeof vaildator>, next);
                                     }
                                 }
-                                else {
-                                    req.body = result.data;
-                                    await router(req, res as Express.Response<typeof vaildator>, next);
-                                }
-                            } else {
-                                next();
-                            }
-                        });
-                    }
-                } else {
-                    app.use(
-                        path,
-                        async (req, res, next) => {
-                            if (req.path !== path) return next();
-
-                            // If the method is GET, skip the vaildator.
-                            // Because the GET method doesn't have a body.
-                            if (req.method === "GET") {
-                                next();
-                                return;
-                            }
-                            const result = RRouterVaildatorExtends<typeof vaildator>(req.body, vaildator);
-                            if (result.success === "false") {
-                                if (typeof this.__plugins.find(p => p.name === "onVaildatorError") !== "undefined") {
-                                    this.__plugins.find(p => p.name === "onVaildatorError")?.onUse(req, res, next, result);
-                                } else {
-                                    res.status(400).json({
-                                        message: 'Vaildation error.',
-                                        error: result.error
-                                    })
-                                }
-                            }
-                            else {
-                                req.body = result.data;
-                                await router(req, res as Express.Response<typeof vaildator>, next);
-                            }
+                            );
                         }
-                    );
-                }
+                    })
+                )
+                return;
             }
             if ("stack" in router) {
                 app.use(router);
@@ -359,6 +423,7 @@ export class RRouter {
                 const path = this.getRouterPath(route);
                 this.traseLog(`[Loader] GET : ${path}`);
                 if (typeof routerConfig !== "undefined") {
+                    await this.loadByConfig(app, route);
                     if ("method" in routerConfig) {
                         app.use(async (req, res, next) => {
                             if (req.path !== path) return next();
@@ -381,7 +446,7 @@ export class RRouter {
             }
             routeCount++;
             console.log(`[Loader] Loaded : ${"stack" in router ? router.stack[0].route?.path : this.getRouterPath(route)}`);
-            if (routeCount === routes.length) {
+            if (routeCount === allRouteCount) {
                 this.traseLog('[RRouter -> Route] All routes loaded.');
 
                 this.traseLog('[RRouter] Registering plugins...');
@@ -392,66 +457,13 @@ export class RRouter {
                     //
                     if (typeof plugin.onUse == "function") {
                         if (plugin.onUse instanceof Promise) {
-                            app.use(plugin.onUse);
+                            // promisified onUse
+                            app.use(async (...args) => {
+                                await plugin.onUse(...args);
+                            });
                         }
                         else app.use(plugin.onUse);
                     }
-                if ( "stack" in router ) {
-                    app.use(router);
-                }
-                else {
-                    const routerConfig = (await import(route)).config as IRRouterRouterConfig || undefined;
-                    const path = this.getRouterPath(route);
-                    this.traseLog(`[Loader] GET : ${path}`);
-                    if( typeof routerConfig !== "undefined" ){
-                        await this.loadByConfig( app, route)
-                        if ("method" in routerConfig) {
-                            this.addRoutes({ path, method: routerConfig.method, router })
-                            //this.parseConfig( path, routerConfig )
-                            app.use(async (req, res, next) => {
-                                this.traseLog(`${req.method} : ${req.path} -> ${path}`);
-                                if (req.path !== path) return next();
-                                if (routerConfig.method.includes(req.method.toUpperCase() as HTTPMethod)) {
-                                    await router(req, res, next);
-                                } else {
-                                    next();
-                                }
-                            });
-                        } 
-                    } else {
-                        app.use(
-                            path,
-                            async (req, res, next) => {
-                                if (req.path !== path) return next();
-                                await router(req, res, next);
-                            }
-                        );
-                        this.addRoutes({
-                            path,
-                            method: HTTPMethods ,
-                            router
-                        })
-                    }
-                }
-                routeCount++;
-                console.log(`[Loader] Loaded : ${"stack" in router ? router.stack[0].route?.path : this.getRouterPath(route)}`);
-                if (routeCount === routes.length) {
-                    this.traseLog('[RRouter -> Route] All routes loaded.');
-                    this.traseLog('[RRouter] Registering plugins...');
-                    this.__plugins.forEach(plugin => {
-                        this.traseLog(`[RRouter -> Plugin] Registering plugin: ${plugin.name}`);
-                        //
-                        // Beta : Promise based onUse
-                        //
-                        if (typeof plugin.onUse == "function") {
-                            if (plugin.onUse instanceof Promise) {
-                                // promisified onUse
-                                app.use( async(...args) => {
-                                    await plugin.onUse(...args);
-                                });
-                            }
-                            else app.use(plugin.onUse);
-                        }
 
                     if (typeof plugin.onServerError === "function") {
                         app.use(plugin.onServerError);
