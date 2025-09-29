@@ -13,7 +13,7 @@ import {
 import {
     RRouterVaildatorExtends
 } from "../../validator"
-import { z } from 'zod';
+import { z, ZodNull } from 'zod';
 import { IRRouterRouterData, IRRouterRouterDatas } from '../../types/router/IRRouterData';
 import { HTTPMethods } from '../constants/httpMethods';
 
@@ -44,6 +44,9 @@ export class RRouter {
      * Registered routes
      */
     protected registeredRoutes: IRRouterRouterDatas = [];
+
+    private loadedRouteCount: number = 0;
+    private allRouteCount: number = 0;
 
     protected Request: Express.Request;
     protected Response: Express.Response;
@@ -139,8 +142,6 @@ export class RRouter {
 
     protected traseLog(...message: Array<string | object | symbol | number | boolean>) {
         if (this.__isDev) {
-            console.log(message);
-            return;
             if (typeof message === "string") console.log(message);
             else console.dir(message, { depth: null });
         }
@@ -161,6 +162,35 @@ export class RRouter {
             return method
         }
         else return [method]
+    }
+
+    private checkAllRouteLoaded() {
+        if (this.loadedRouteCount === this.allRouteCount) {
+            this.traseLog('[RRouter -> Route] All routes loaded.');
+
+            this.traseLog('[RRouter] Registering plugins...');
+            this.__plugins.forEach(plugin => {
+                this.traseLog(`[RRouter -> Plugin] Registering plugin: ${plugin.name}`);
+                //
+                // Beta : Promise based onUse
+                //
+                if (typeof plugin.onUse == "function") {
+                    if (plugin.onUse instanceof Promise) {
+                        // promisified onUse
+                        this.__app.use(async (...args) => {
+                            await plugin.onUse(...args);
+                        });
+                    }
+                    else this.__app.use(plugin.onUse);
+                }
+
+                if (typeof plugin.onServerError === "function") {
+                    this.__app.use(plugin.onServerError);
+                }
+
+                if (typeof plugin.onRegister === "function") plugin.onRegister();
+            });
+        }
     }
 
     /**
@@ -287,6 +317,9 @@ export class RRouter {
                         next()
                     }
                 })
+                this.loadedRouteCount++;
+                this.traseLog(`[Loader] Loaded : ${path}`);
+                this.checkAllRouteLoaded();
             }
         }
     }
@@ -315,10 +348,9 @@ export class RRouter {
 
         const directory = new RouterDirectory(this.dirname);
         const routes = directory.getRoutes();
-        let allRouteCount = await this.getRouteCounts(routes);
-        let routeCount = 0;
+        this.allRouteCount = await this.getRouteCounts(routes);
 
-        this.traseLog(`[RRouter -> Route] Found ${allRouteCount} routes.`);
+        this.traseLog(`[RRouter -> Route] Found ${this.allRouteCount} routes.`);
 
         routes.map(async route => {
             const router = (await import(route)).default as Router | IRRouterRouter | void;
@@ -326,14 +358,14 @@ export class RRouter {
 
             if (typeof router === "undefined" || !router || typeof router !== "function") {
                 this.traseLog(`[RRouter -> Route] Invalid route: ${route}`);
-                allRouteCount--;
+                this.allRouteCount--;
                 routes.splice(routes.indexOf(route), 1);
                 return;
             }
             if (this.__vaildator && typeof vaildator !== "undefined") {
                 if (typeof vaildator === "undefined") {
                     this.traseLog(`[RRouter -> Route] Vaildator not found: ${route}`);
-                    allRouteCount--;
+                    this.allRouteCount--;
                     return;
                 }
                 Promise.all(
@@ -413,9 +445,8 @@ export class RRouter {
                         }
                     })
                 )
-                return;
             }
-            if ("stack" in router) {
+            else if ("stack" in router) {
                 app.use(router);
             }
             else {
@@ -444,36 +475,10 @@ export class RRouter {
                     );
                 }
             }
-            routeCount++;
-            console.log(`[Loader] Loaded : ${"stack" in router ? router.stack[0].route?.path : this.getRouterPath(route)}`);
-            if (routeCount === allRouteCount) {
-                this.traseLog('[RRouter -> Route] All routes loaded.');
-
-                this.traseLog('[RRouter] Registering plugins...');
-                this.__plugins.forEach(plugin => {
-                    this.traseLog(`[RRouter -> Plugin] Registering plugin: ${plugin.name}`);
-                    //
-                    // Beta : Promise based onUse
-                    //
-                    if (typeof plugin.onUse == "function") {
-                        if (plugin.onUse instanceof Promise) {
-                            // promisified onUse
-                            app.use(async (...args) => {
-                                await plugin.onUse(...args);
-                            });
-                        }
-                        else app.use(plugin.onUse);
-                    }
-
-                    if (typeof plugin.onServerError === "function") {
-                        app.use(plugin.onServerError);
-                    }
-
-                    if (typeof plugin.onRegister === "function") plugin.onRegister();
-                });
-            }
+            this.loadedRouteCount++;
+            console.log(`[Loader] Loaded (${this.loadedRouteCount}/${this.allRouteCount}) : ${"stack" in router ? router.stack[0].route?.path : this.getRouterPath(route)}`);
         })
-
+        this.checkAllRouteLoaded();
         this.traseLog('[RRouter -> start] Starting express...');
         app.listen(port, () => {
             this.traseLog(`[RRouter] Express started on port ${port}`);
