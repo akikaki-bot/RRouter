@@ -1,8 +1,6 @@
-
-
 # RRouter
 
-This framework is work in progress.
+An extension framework for Express.js that provides type-safe request and response handling.
 
 # Usage
 
@@ -66,25 +64,53 @@ router.get('/', async ( req, res ) => {
 export default router
 ```
 
-and Custom method handler!
+# Validation request
+
+You can add validator in router, also can configurate custom validator error.
 
 ```ts
+import z from "zod"
 import { IRRouterRouter, IRRouterRouterConfig } from "rrouter/types";
 
+export const vaildator = z.object({
+    name : z.string().min(3).max(255)
+})
+
 export const config : IRRouterRouterConfig = {
-    POST : customPOSTHandler
+    method : [ "POST" ]
+}
+type VaildatorType = z.infer<typeof vaildator>;
+interface ResponseBody {
+    message : string;
 }
 
-const customPOSTHandler : IRRouterRouter = async ( req, res ) => {
-    res.status(200).json({
-        status : "OK",
-        data : req.data
+// type-safe Router generics
+const router : IRRouterRouter<ResponseBody, VaildatorType> = async ( req, res ) => {
+    res.send({
+         message : req.body.name
     });
 }
 
-const blankRouter : IRRouterRouter = ( req, res) => void 0;
-export default blankRouter
+export default router;
 ```
+
+configurate in main file:
+```ts
+rrouter.use({
+    name : "onVaildatorError",
+    version : "0.0.1",
+    onUse( req, res, next, err ){
+        res.status(400).json({
+            message: 'Vaildator error.',
+            errBody: err
+        })
+    }
+})
+```
+
+
+
+
 
 
 

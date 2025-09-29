@@ -11,6 +11,7 @@ export interface __IRRouterConfig {
     useUrlEncoded : boolean;
     dirname : string;
     OVERRIDE_HTTP_METHOD: boolean
+    enableValidator : boolean;
     // useCookieParser : boolean;
     // useBodyParser : boolean;
     // useSession : boolean;
