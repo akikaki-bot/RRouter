@@ -13,7 +13,7 @@ export interface RRouterVaildatorError {
 
 export type RRouterVaildatorResult<T = any> = RRouterVaildatorSuccess<T> | RRouterVaildatorError;
 
-export function RRouterVaildatorExtends<T = any>( input : any, zod : z.ZodType<any, z.ZodTypeDef, any> ) : RRouterVaildatorResult<T> {
+export function RRouterVaildatorExtends<T = any>( input : any, zod : z.ZodType<any, z.ZodType, any> ) : RRouterVaildatorResult<T> {
     const result = zod.safeParse( input );
     if( result.success ) {
         return {
